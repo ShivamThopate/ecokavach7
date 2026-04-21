@@ -77,12 +77,17 @@
     <video id="video" autoplay muted playsinline></video>
 
     <script>
+        // --- CORE VARIABLES ---
         let model, video, scene, camera, renderer;
-        let goodModel = null, badModel = null; // Initialize as null
+        let goodModel = null, badModel = null; 
         
         let currentObject = null; 
         let targetX = 0, targetY = 0;
         let isDetected = false;
+
+        // --- N8N TRACKING VARIABLES ---
+        let lastSentObject = null; 
+        let cooldownTimer = null;
 
         let carbonTag = document.getElementById('carbon-tag');
         let recycleTag = document.getElementById('recycle-tag');
@@ -95,10 +100,9 @@
         function loadAssets() {
             const loader = new THREE.GLTFLoader();
 
-            // Load Tree
             loader.load('./tree.glb', function (gltf) {
                 goodModel = gltf.scene;
-                goodModel.scale.set(0.8, 0.8, 0.8); // Adjust scale if needed
+                goodModel.scale.set(0.8, 0.8, 0.8); 
                 goodModel.visible = false;
                 scene.add(goodModel);
                 console.log("Tree model loaded");
@@ -106,10 +110,9 @@
                 console.error("Error loading tree.glb:", error);
             });
 
-            // Load Trash
             loader.load('./trash.glb', function (gltf) {
                 badModel = gltf.scene;
-                badModel.scale.set(0.03, 0.03, 0.03); // Adjust scale if needed
+                badModel.scale.set(0.03, 0.03, 0.03); 
                 badModel.visible = false;
                 scene.add(badModel);
                 console.log("Trash model loaded");
@@ -171,6 +174,34 @@
             return db[className] || null;
         }
 
+        // --- N8N WEBHOOK INTEGRATION ---
+        async function sendToN8n(objectName, emissionData, colorCode) {
+            const webhookUrl = "https://shivamthopate.app.n8n.cloud/webhook-test/f0d37b24-bf3b-4f96-8e82-58bc27c72d03";
+
+            let categoryName = "General Waste";
+            if (colorCode === '#FF0000') categoryName = "Hazardous E-Waste";
+            else if (colorCode === '#FF4500') categoryName = "Standard E-Waste";
+            else if (colorCode === '#00FF00') categoryName = "Recyclable";
+            else if (colorCode === '#FFFF00') categoryName = "Reusable";
+
+            const payload = {
+                object: objectName,
+                emission: emissionData,
+                category: categoryName
+            };
+
+            try {
+                console.log("Transmitting to n8n:", payload);
+                await fetch(webhookUrl, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                });
+            } catch (error) {
+                console.error("Failed to reach n8n:", error);
+            }
+        }
+
         // --- AI LOOP ---
         function detectFrame() {
             model.detect(video).then(predictions => {
@@ -180,6 +211,16 @@
                 if (target && goodModel && badModel) {
                     const data = getData(target.class);
                     isDetected = true;
+                    
+                    // --- WEBHOOK ANTI-SPAM LOGIC ---
+                    if (target.class !== lastSentObject) {
+                        lastSentObject = target.class; 
+                        sendToN8n(target.class, data.co2, data.color);
+                        
+                        // Reset the tracker after 10 seconds 
+                        clearTimeout(cooldownTimer);
+                        cooldownTimer = setTimeout(() => { lastSentObject = null; }, 10000);
+                    }
                     
                     let activeModel = (data.color === '#FF0000' || data.color === '#FF4500') ? badModel : goodModel;
                     
